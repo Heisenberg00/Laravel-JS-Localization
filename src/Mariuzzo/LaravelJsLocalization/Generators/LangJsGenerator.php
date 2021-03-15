@@ -2,6 +2,7 @@
 
 namespace Mariuzzo\LaravelJsLocalization\Generators;
 
+use Illuminate\Support\Facades\Config;
 use InvalidArgumentException;
 use Illuminate\Filesystem\Filesystem as File;
 use Illuminate\Support\Str;
@@ -46,7 +47,7 @@ class LangJsGenerator
     /**
      * Construct a new LangJsGenerator instance.
      *
-     * @param File   $file       The file service instance.
+     * @param File $file The file service instance.
      * @param string $sourcePath The source path of the language files.
      */
     public function __construct(File $file, $sourcePath, $messagesIncluded = [])
@@ -59,8 +60,8 @@ class LangJsGenerator
     /**
      * Generate a JS lang file from all language files.
      *
-     * @param string $target  The target directory.
-     * @param array  $options Array of options.
+     * @param string $target The target directory.
+     * @param array $options Array of options.
      *
      * @return int
      */
@@ -70,26 +71,28 @@ class LangJsGenerator
             $this->sourcePath = $options['source'];
         }
 
-        $messages = $this->getMessages($options['no-sort']);
-        $this->prepareTarget($target);
 
-        if ($options['no-lib']) {
-            $template = $this->file->get(__DIR__.'/Templates/messages.js');
-        } else if ($options['json']) {
-            $template = $this->file->get(__DIR__.'/Templates/messages.json');
-        } else {
-            $template = $this->file->get(__DIR__.'/Templates/langjs_with_messages.js');
-            $langjs = $this->file->get(__DIR__.'/../../../../lib/lang.min.js');
-            $template = str_replace('\'{ langjs }\';', $langjs, $template);
+        $langues = config('app.plateforme_langues');
+
+
+        $template = $this->file->get(__DIR__ . '/Templates/messages.json');
+
+
+        foreach ($langues as $langue) {
+
+            $messages = $this->getMessages($options['no-sort'], $langue);
+            $template = str_replace('\'{ messages }\'', json_encode($messages, JSON_UNESCAPED_UNICODE), $template);
+
+            if ($options['compress']) {
+                $template = Minifier::minify($template);
+            }
+
+            $langue_target = Config::get('localization-js.path') . "/" . $langue . '.json';
+            $this->file->put($langue_target, $template);
         }
 
-        $template = str_replace('\'{ messages }\'', json_encode($messages), $template);
+        return true;
 
-        if ($options['compress']) {
-            $template = Minifier::minify($template);
-        }
-
-        return $this->file->put($target, $template);
     }
 
     /**
@@ -116,7 +119,7 @@ class LangJsGenerator
      *
      * @throws \Exception
      */
-    protected function getMessages($noSort)
+    protected function getMessages($noSort, $langue = null)
     {
         $messages = [];
         $path = $this->sourcePath;
@@ -135,20 +138,29 @@ class LangJsGenerator
             if ($this->isMessagesExcluded($pathName)) {
                 continue;
             }
+            $lang_dir = substr($pathName, 0, 2);
+
+            if ($langue != $lang_dir)
+                continue;
+
 
             $key = substr($pathName, 0, -4);
             $key = str_replace('\\', '.', $key);
             $key = str_replace('/', '.', $key);
+            $key = str_replace($langue . ".", "", $key);
+
 
             if (Str::startsWith($key, 'vendor')) {
                 $key = $this->getVendorKey($key);
             }
 
-            $fullPath = $path.DIRECTORY_SEPARATOR.$pathName;
+            $fullPath = $path . DIRECTORY_SEPARATOR . $pathName;
+
+
             if ($extension == 'php') {
                 $messages[$key] = include $fullPath;
             } else {
-                $key = $key.$this->stringsDomain;
+                $key = $key . $this->stringsDomain;
                 $fileContent = file_get_contents($fullPath);
                 $messages[$key] = json_decode($fileContent, true);
 
@@ -158,10 +170,67 @@ class LangJsGenerator
             }
         }
 
-        if (!$noSort)
-        {
+        $this->getThemeMessages($messages, $langue);
+
+        if (!$noSort) {
             $this->sortMessages($messages);
         }
+
+
+        return $messages;
+    }
+
+    protected function getThemeMessages(&$messages, $langue)
+    {
+        $path = theme_path('resources/lang', config('themes.active'));
+
+        if (!$this->file->exists($path)) {
+            throw new \Exception("${path} doesn't exists!");
+        }
+
+        foreach ($this->file->allFiles($path) as $file) {
+            $pathName = $file->getRelativePathName();
+            $extension = $this->file->extension($pathName);
+            if ($extension != 'php' && $extension != 'json') {
+                continue;
+            }
+
+            if ($this->isMessagesExcluded($pathName)) {
+                continue;
+            }
+
+            $lang_dir = substr($pathName, 0, 2);
+
+            if ($langue != $lang_dir)
+                continue;
+
+
+            $key = substr($pathName, 0, -4);
+            $key = str_replace('\\', '.', $key);
+            $key = str_replace('/', '.', $key);
+            $key = str_replace($langue . ".", "", $key);
+
+            if (Str::startsWith($key, 'vendor')) {
+                $key = $this->getVendorKey($key);
+            }
+
+            $fullPath = $path . DIRECTORY_SEPARATOR . $pathName;
+
+            $key = "theme." . $key;
+
+            if ($extension == 'php') {
+                $messages[$key] = include $fullPath;
+            } else {
+                $key = $key . $this->stringsDomain;
+                $fileContent = file_get_contents($fullPath);
+                $messages[$key] = json_decode($fileContent, true);
+
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new InvalidArgumentException('Error while decode ' . basename($fullPath) . ': ' . json_last_error_msg());
+                }
+            }
+        }
+
 
         return $messages;
     }
@@ -212,6 +281,6 @@ class LangJsGenerator
         $keyParts = explode('.', $key, 4);
         unset($keyParts[0]);
 
-        return $keyParts[2] .'.'. $keyParts[1] . '::' . $keyParts[3];
+        return $keyParts[2] . '.' . $keyParts[1] . '::' . $keyParts[3];
     }
 }

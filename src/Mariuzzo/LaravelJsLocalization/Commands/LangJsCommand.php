@@ -97,7 +97,7 @@ class LangJsCommand extends Command
      */
     protected function getDefaultPath()
     {
-        return Config::get('localization-js.path', public_path('messages.js'));
+        return Config::get('localization-js.path');
     }
 
     /**
